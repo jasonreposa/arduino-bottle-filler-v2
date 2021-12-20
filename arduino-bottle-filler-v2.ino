@@ -13,32 +13,32 @@
 #define PURGING_TIME_EEPROM_ADDRESS 1
 
 // Air cylinder solenoid - relay for lowering and raising filling heads
-#define AIR_CYLINDER_RELAY_1 2
+#define AIR_CYLINDER_RELAY_1 2  // relay 1
 
 // CO2 solenoid - relay for purging the Oxygen from the bottles
-#define CO2_PURGE_RELAY_1 3
+#define CO2_PURGE_RELAY_1 3  // relay 2
 
 // Beverage solenoid - relay for filling bottles with beverage
-#define BEVERAGE_FILLING_RELAY_1 4
-#define BEVERAGE_FILLING_RELAY_2 5
-#define BEVERAGE_FILLING_RELAY_3 6
-#define BEVERAGE_FILLING_RELAY_4 7
+#define BEVERAGE_FILLING_RELAY_1 4  // relay 3
+#define BEVERAGE_FILLING_RELAY_2 5  // relay 4
+#define BEVERAGE_FILLING_RELAY_3 6  // relay 5
+#define BEVERAGE_FILLING_RELAY_4 7  // relay 6
 
 // water flow sensors
 #define BEVERAGE_SENSOR_1 10
-volatile uint32_t pulseCount1;
+volatile uint8_t pulseCount1;
 double beverageVolume1 = 0.0;
 
 #define BEVERAGE_SENSOR_2 16
-volatile uint32_t pulseCount2;
+volatile uint8_t pulseCount2;
 double beverageVolume2 = 0.0;
 
 #define BEVERAGE_SENSOR_3 14
-volatile uint32_t pulseCount3;
+volatile uint8_t pulseCount3;
 double beverageVolume3 = 0.0;
 
 #define BEVERAGE_SENSOR_4 15
-volatile uint32_t pulseCount4;
+volatile uint8_t pulseCount4;
 double beverageVolume4 = 0.0;
 
 uint32_t startTime = 0;
@@ -46,17 +46,24 @@ uint32_t loopTime = 0;
 
 uint32_t timeBetweenInterruptCheck = 100; // check flow meter every tenth of a second
 
-// real stuff
 // Area of 1/4 diameter (6.35 millimeters) = pi * (6.35/2)^2 = 31.6692174436
 // Area of 3/8 diameter (9.52 millimeters) = pi * (9.52/2)^2 = 71.180949708
 uint32_t pulsesPerLiter = 1380; // 1/4 DIGITEN - https://digiten.shop/products/digiten-1-4-quick-connect-0-3-10l-min-water-hall-effect-flow-sensor-meter
 // uint32_t pulsesPerLiter = 450; // 3/8 DIGITEN - https://smile.amazon.com/ask/questions/TxNFD5HNWLKHEW/ref=ask_dp_dpmw_al_hza - https://www.digiten.shop/products/digiten-g3-8-quick-connect-water-flow-sensor-switch-flowmeter-counter-0-3-10l-min
 
-double ouncesToFill = 355.0;  // i'm comfortable with this for now
-double psiAdjustment = 230.0/355.0;  // TODO: overwrite with EEPROM?
+double ouncesToFill = 355.0;  // TODO: editable and overwrite with EEPROM?
+
+// I've lost the math somewhere in here, but for now we'll hard code a new number
+// double psiAdjustment = 230.0/355.0;  // TODO: overwrite with EEPROM?
 // pulsesPerLiter / 60 minutes / 60 seconds * psiAdjustment * 1000.0 (convert to milliseconds?)
-//double twelveOunceConstant = 1380.0 / 60.0 / 60.0 * (230.0/355.0) * 1000.0;
-double twelveOunceConstant = 248.3568075117;
+//double mLsPerPulseConstant = 1380.0 / 60.0 / 60.0 * (230.0/355.0) * 1000.0;
+//double mLsPerPulseConstant = 1380.0 / 60.0 / 60.0;// * 1000.0;
+//double mLsPerPulseConstant = 1380.0 / 60.0 / 60.0 * (230.0/355.0);// * 1000.0;
+//double mLsPerPulseConstant = 248.3568075117;
+// 1380 pulses per liter * 0.355 liters = 489.9 pulses to get to 355mLs
+
+// 12 PSI - the hard coded number, until I figure out the math above again. The math below had to change as well.
+double mLsPerPulseConstant = 0.4725;  // how many mL in each pulse?
 
 // BOOL state machine, ha!
 bool fillingInProcess = false;
@@ -65,8 +72,8 @@ bool fillingHead2Stopped = true;
 bool fillingHead3Stopped = true;
 bool fillingHead4Stopped = true;
 
-uint32_t loweringTimeInMillis = 3000;  // overwrite with EEPROM
-uint32_t purgingTimeInMillis = 3000;  // overwrite with EEPROM
+uint32_t loweringTimeInMillis = 3000;  // editable and overwrite with EEPROM
+uint32_t purgingTimeInMillis = 3000;  // editable and overwrite with EEPROM
 
 void setup() {
   // RX and TX on the pro micro to communicate between the HMI / Nextion touch screen display
@@ -83,14 +90,16 @@ void setup() {
   Serial.println("SETUP");
 
   // Lowering Filling Heads TIME - load from EEPROM
-  uint8_t loweringTimeValueFromEEPROM = EEPROM.read(LOWERING_TIME_EEPROM_ADDRESS);
+  uint8_t loweringTimeValueFromEEPROM = 30;
+  //EEPROM.get(LOWERING_TIME_EEPROM_ADDRESS, loweringTimeValueFromEEPROM);
   if (loweringTimeValueFromEEPROM && loweringTimeValueFromEEPROM != 255) {
     updateLoweringTime(loweringTimeValueFromEEPROM);
     Serial.print("Found a lowering time value: "); Serial.println(loweringTimeInMillis);
   }
 
   // Purging Oxygen with CO2 TIME - load from EEPROM
-  uint8_t purgingTimeValueFromEEPROM = EEPROM.read(PURGING_TIME_EEPROM_ADDRESS);
+  uint8_t purgingTimeValueFromEEPROM = 30;
+  //EEPROM.get(PURGING_TIME_EEPROM_ADDRESS, purgingTimeValueFromEEPROM);
   if (purgingTimeValueFromEEPROM && purgingTimeValueFromEEPROM != 255) {
     updatePurgingTime(purgingTimeValueFromEEPROM);
     Serial.print("Found a purging time value: "); Serial.println(purgingTimeInMillis);
@@ -126,7 +135,12 @@ void setup() {
   sei(); // turn on interrupts
 }
 
+bool startPress = false;
 void loop() {
+  if (startPress) {
+    startFillingProcess();
+    startPress = false;
+  }
   // check touch screen for any actions
   checkTouchScreen();
 
@@ -226,18 +240,16 @@ void checkFillingHeads() {
 
 // sensor 1
 void checkFlowMeter1(uint32_t currentTime) {
-  // An interrupt that changes more than 8-bit needs to be inside an ATOMIC block, otherwise the data could be corrupted.
-  // Change this to an unsigned int to store values from 0-255, but make sure you don't fill too fast?
-  // More than 255 pulses in 0.1 seconds would be pretty fast, if not impossible? Do the math before removing the ATOMIC block.
-  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    beverageVolume1 = beverageVolume1 + (pulseCount1 / twelveOunceConstant);
-    if (pulseCount1 > 0) {
-      Serial.print("Flow From Sensor 1: "); Serial.print(pulseCount1); Serial.print(" : "); Serial.print(beverageVolume1); Serial.println(" mL;");
-    }
+  if (fillingHead1Stopped) { return; }
 
-    // reset counter
-    pulseCount1 = 0;
+  // only using an int for pulseCount, so no need for an ATOMIC block
+  beverageVolume1 = beverageVolume1 + (pulseCount1 * mLsPerPulseConstant);
+  if (pulseCount1 > 0) {
+    Serial.print("Flow From Sensor 1: "); Serial.print(pulseCount1); Serial.print(" : "); Serial.print(beverageVolume1); Serial.println(" mL;");
   }
+
+  // reset counter
+  pulseCount1 = 0;
 
   // stop filling, if we are full
   if (beverageVolume1 >= ouncesToFill) {
@@ -248,18 +260,16 @@ void checkFlowMeter1(uint32_t currentTime) {
 
 // sensor 2
 void checkFlowMeter2(uint32_t currentTime) {
-  // An interrupt that changes more than 8-bit needs to be inside an ATOMIC block, otherwise the data could be corrupted.
-  // Change this to an unsigned int to store values from 0-255, but make sure you don't fill too fast?
-  // More than 255 pulses in 0.1 seconds would be pretty fast, if not impossible? Do the math before removing the ATOMIC block.
-  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    beverageVolume2 = beverageVolume2 + (pulseCount2 / twelveOunceConstant);
-    if (pulseCount2 > 0) {
-      Serial.print("Flow From Sensor 2: "); Serial.print(pulseCount2); Serial.print(" : "); Serial.print(beverageVolume2); Serial.println(" mL;");
-    }
+  if (fillingHead2Stopped) { return; }
 
-    // reset counter
-    pulseCount2 = 0;
+  // only using an int for pulseCount, so no need for an ATOMIC block
+  beverageVolume2 = beverageVolume2 + (pulseCount2 * mLsPerPulseConstant);
+  if (pulseCount2 > 0) {
+    Serial.print("Flow From Sensor 2: "); Serial.print(pulseCount2); Serial.print(" : "); Serial.print(beverageVolume2); Serial.println(" mL;");
   }
+
+  // reset counter
+  pulseCount2 = 0;
 
   // stop filling, if we are full
   if (beverageVolume2 >= ouncesToFill) {
@@ -270,18 +280,16 @@ void checkFlowMeter2(uint32_t currentTime) {
 
 // sensor 3
 void checkFlowMeter3(uint32_t currentTime) {
-  // An interrupt that changes more than 8-bit needs to be inside an ATOMIC block, otherwise the data could be corrupted.
-  // Change this to an unsigned int to store values from 0-255, but make sure you don't fill too fast?
-  // More than 255 pulses in 0.1 seconds would be pretty fast, if not impossible? Do the math before removing the ATOMIC block.
-  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    beverageVolume3 = beverageVolume3 + (pulseCount3 / twelveOunceConstant);
-    if (pulseCount3 > 0) {
-      Serial.print("Flow From Sensor 3: "); Serial.print(pulseCount3); Serial.print(" : "); Serial.print(beverageVolume3); Serial.println(" mL;");
-    }
+  if (fillingHead3Stopped) { return; }
 
-    // reset counter
-    pulseCount3 = 0;
+  // only using an int for pulseCount, so no need for an ATOMIC block
+  beverageVolume3 = beverageVolume3 + (pulseCount3 * mLsPerPulseConstant);
+  if (pulseCount3 > 0) {
+    Serial.print("Flow From Sensor 3: "); Serial.print(pulseCount3); Serial.print(" : "); Serial.print(beverageVolume3); Serial.println(" mL;");
   }
+
+  // reset counter
+  pulseCount3 = 0;
 
   // stop filling, if we are full
   if (beverageVolume3 >= ouncesToFill) {
@@ -292,18 +300,16 @@ void checkFlowMeter3(uint32_t currentTime) {
 
 // sensor 4
 void checkFlowMeter4(uint32_t currentTime) {
-  // An interrupt that changes more than 8-bit needs to be inside an ATOMIC block, otherwise the data could be corrupted.
-  // Change this to an unsigned int to store values from 0-255, but make sure you don't fill too fast?
-  // More than 255 pulses in 0.1 seconds would be pretty fast, if not impossible? Do the math before removing the ATOMIC block.
-  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    beverageVolume4 = beverageVolume4 + (pulseCount4 / twelveOunceConstant);
-    if (pulseCount4 > 0) {
-      Serial.print("Flow From Sensor 4: "); Serial.print(pulseCount4); Serial.print(" : "); Serial.print(beverageVolume4); Serial.println(" mL;");
-    }
+  if (fillingHead4Stopped) { return; }
 
-    // reset counter
-    pulseCount4 = 0;
+  // only using an int for pulseCount, so no need for an ATOMIC block
+  beverageVolume4 = beverageVolume4 + (pulseCount4 * mLsPerPulseConstant);
+  if (pulseCount4 > 0) {
+    Serial.print("Flow From Sensor 4: "); Serial.print(pulseCount4); Serial.print(" : "); Serial.print(beverageVolume4); Serial.println(" mL;");
   }
+
+  // reset counter
+  pulseCount4 = 0;
 
   // stop filling, if we are full
   if (beverageVolume4 >= ouncesToFill) {
@@ -361,18 +367,22 @@ void startFilling() {
 // STEP 4
 // After the bottle is filled with beverage, stop filling
 void stopFilling1() {
+  beverageVolume1 = 0.0;
   fillingHead1Stopped = true;
   digitalWrite(BEVERAGE_FILLING_RELAY_1, HIGH);
 }
 void stopFilling2() {
+  beverageVolume2 = 0.0;
   fillingHead2Stopped = true;
   digitalWrite(BEVERAGE_FILLING_RELAY_2, HIGH);
 }
 void stopFilling3() {
+  beverageVolume3 = 0.0;
   fillingHead3Stopped = true;
   digitalWrite(BEVERAGE_FILLING_RELAY_3, HIGH);
 }
 void stopFilling4() {
+  beverageVolume4 = 0.0;
   fillingHead4Stopped = true;
   digitalWrite(BEVERAGE_FILLING_RELAY_4, HIGH);
 }
@@ -411,7 +421,7 @@ void updateAndSaveLoweringTime(uint8_t newTime) {
 
   Serial.print("New Lowering Time: "); Serial.println(newTime);
   // write it to memory
-  EEPROM.write(LOWERING_TIME_EEPROM_ADDRESS, newTime);
+  EEPROM.put(LOWERING_TIME_EEPROM_ADDRESS, newTime);
 }
 
 void updatePurgingTime(uint8_t newTime) {
@@ -425,7 +435,7 @@ void updateAndSavePurgingTime(uint8_t newTime) {
 
   Serial.print("New Purging Time: "); Serial.println(newTime);
   // write it to memory
-  EEPROM.write(PURGING_TIME_EEPROM_ADDRESS, newTime);
+  EEPROM.put(PURGING_TIME_EEPROM_ADDRESS, newTime);
 }
 
 // HMI functions
