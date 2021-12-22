@@ -7,10 +7,7 @@
 #include <EnableInterrupt.h>
 #include <util/atomic.h>
 #include <EEPROM.h>
-
-// each address is 8 bits / 1 byte away (unless you use avrEeprom, which currently isn't working for me)
-#define LOWERING_TIME_EEPROM_ADDRESS 0
-#define PURGING_TIME_EEPROM_ADDRESS 1
+#include "OurNextion.h"
 
 // Air cylinder solenoid - relay for lowering and raising filling heads
 #define AIR_CYLINDER_RELAY_1 2  // relay 1
@@ -51,8 +48,6 @@ uint32_t timeBetweenInterruptCheck = 100; // check flow meter every tenth of a s
 uint32_t pulsesPerLiter = 1380; // 1/4 DIGITEN - https://digiten.shop/products/digiten-1-4-quick-connect-0-3-10l-min-water-hall-effect-flow-sensor-meter
 // uint32_t pulsesPerLiter = 450; // 3/8 DIGITEN - https://smile.amazon.com/ask/questions/TxNFD5HNWLKHEW/ref=ask_dp_dpmw_al_hza - https://www.digiten.shop/products/digiten-g3-8-quick-connect-water-flow-sensor-switch-flowmeter-counter-0-3-10l-min
 
-double ouncesToFill = 355.0;  // TODO: editable and overwrite with EEPROM?
-
 // I've lost the math somewhere in here, but for now we'll hard code a new number
 // double psiAdjustment = 230.0/355.0;  // TODO: overwrite with EEPROM?
 // pulsesPerLiter / 60 minutes / 60 seconds * psiAdjustment * 1000.0 (convert to milliseconds?)
@@ -72,14 +67,21 @@ bool fillingHead2Stopped = true;
 bool fillingHead3Stopped = true;
 bool fillingHead4Stopped = true;
 
-uint32_t loweringTimeInMillis = 3000;  // editable and overwrite with EEPROM
-uint32_t purgingTimeInMillis = 3000;  // editable and overwrite with EEPROM
+// each address is 8 bits / 1 byte away (unless you use avrEeprom, which currently isn't working for me)
+#define LOWERING_TIME_EEPROM_ADDRESS 0
+#define PURGING_TIME_EEPROM_ADDRESS 1
+#define PERCENT_ADJUST_EEPROM_ADDRESS 2
+#define BEVERAGE_SIZE_EEPROM_ADDRESS 3  // 16-bit
+
+uint16_t beverageSizeInML = 355;  // TODO: editable and overwrite with EEPROM (precision: 5)
+uint8_t percentToAdjust = 100;  // editable and overwrite with EEPROM (precision: 1)
+uint32_t loweringTimeInMillis = 3000;  // editable and overwrite with EEPROM (precision: 100)
+uint32_t purgingTimeInMillis = 3000;  // editable and overwrite with EEPROM (precision: 100)
+
+OurNextion nextion;
 
 void setup() {
-  // RX and TX on the pro micro to communicate between the HMI / Nextion touch screen display
-  Serial1.begin(9600);
-  // wait 1 second for Serial1
-  while (!Serial1 && millis() < 1000);
+  nextion.setup(ProcessNextionData);
 
   Serial.begin(9600);
   // wait another 1 second for Serial
@@ -90,19 +92,43 @@ void setup() {
   Serial.println("SETUP");
 
   // Lowering Filling Heads TIME - load from EEPROM
-  uint8_t loweringTimeValueFromEEPROM = 30;
-  //EEPROM.get(LOWERING_TIME_EEPROM_ADDRESS, loweringTimeValueFromEEPROM);
-  if (loweringTimeValueFromEEPROM && loweringTimeValueFromEEPROM != 255) {
+  uint8_t loweringTimeValueFromEEPROM;
+  EEPROM.get(LOWERING_TIME_EEPROM_ADDRESS, loweringTimeValueFromEEPROM);
+  if (loweringTimeValueFromEEPROM) {
     updateLoweringTime(loweringTimeValueFromEEPROM);
     Serial.print("Found a lowering time value: "); Serial.println(loweringTimeInMillis);
+  } else {
+    updateAndSaveLoweringTime(loweringTimeInMillis / 100);  // 3 second default
   }
 
   // Purging Oxygen with CO2 TIME - load from EEPROM
-  uint8_t purgingTimeValueFromEEPROM = 30;
-  //EEPROM.get(PURGING_TIME_EEPROM_ADDRESS, purgingTimeValueFromEEPROM);
-  if (purgingTimeValueFromEEPROM && purgingTimeValueFromEEPROM != 255) {
+  uint8_t purgingTimeValueFromEEPROM;
+  EEPROM.get(PURGING_TIME_EEPROM_ADDRESS, purgingTimeValueFromEEPROM);
+  if (purgingTimeValueFromEEPROM) {
     updatePurgingTime(purgingTimeValueFromEEPROM);
     Serial.print("Found a purging time value: "); Serial.println(purgingTimeInMillis);
+  } else {
+    updateAndSavePurgingTime(purgingTimeInMillis / 100);  // 3 second default
+  }
+
+  // Beverage Adjustment Percentage - load from EEPROM
+  uint8_t beverageAdjustmentValueFromEEPROM;
+  EEPROM.get(PERCENT_ADJUST_EEPROM_ADDRESS, beverageAdjustmentValueFromEEPROM);
+  if (beverageAdjustmentValueFromEEPROM) {
+    updateBeverageAdjustment(beverageAdjustmentValueFromEEPROM);
+    Serial.print("Found a beverage adjustment value: "); Serial.println(percentToAdjust);
+  } else {
+    updateAndSaveBeverageAdjustment(percentToAdjust); // 100% default
+  }
+
+  // Beverage Size in MLs - load from EEPROM
+  uint8_t beverageSizeValueFromEEPROM;
+  EEPROM.get(BEVERAGE_SIZE_EEPROM_ADDRESS, beverageSizeValueFromEEPROM);
+  if (beverageSizeValueFromEEPROM) {
+    updateBeverageSize(beverageSizeValueFromEEPROM);
+    Serial.print("Found a beverage size value: "); Serial.println(beverageSizeInML);
+  } else {
+    updateAndSaveBeverageSize(beverageSizeInML / 5);  // 355mL
   }
 
   // solenoid that opens and closes to raise and lower filling heads
@@ -135,14 +161,9 @@ void setup() {
   sei(); // turn on interrupts
 }
 
-bool startPress = false;
 void loop() {
-  if (startPress) {
-    startFillingProcess();
-    startPress = false;
-  }
   // check touch screen for any actions
-  checkTouchScreen();
+  nextion.listen();
 
   // if we are filling things, check the filling heads
   if (fillingInProcess) {
@@ -151,50 +172,9 @@ void loop() {
 }
 
 
-void checkTouchScreen() {
-  // 65 0 2 0 FF FF FF - Capping Start Button
-  // 65 0 8 0 FF FF FF - Filling Start Button
-  while (Serial1.available() > 0) {
-    int serial_datum = Serial1.read();
-    //    Serial.print(serial_datum);
-    //    Serial.print(" - ");
-    //    Serial.println(serial_datum, HEX);
-
-    // really unsafe. the data comes over one int at a time in the loop(),
-    // so if we ever have a conflict with a number like 101, 255, 0 or a
-    // button with the same id, this would need to be rewritten.
-    if (serial_datum == 2) {
-//      Serial.println("Start Capping");
-//      cappingProcess.onStartButtonPress(true);
-    } else if (serial_datum == 8) {
-      Serial.println("START PRESSED");
-      if (fillingInProcess) {
-        emergencyStop();
-      } else {
-        startFillingProcess();
-      }
-    } else if (serial_datum == 9) {
-      // lowering time change UP
-      Serial.println("LOWERING TIME INCREASE PRESSED");
-      updateAndSaveLoweringTime(loweringTimeInMillis / 100 + 1);
-    } else if (serial_datum == 10) {
-      // lowering time change UP
-      Serial.println("LOWERING TIME DECREASE PRESSED");
-      updateAndSaveLoweringTime(loweringTimeInMillis / 100 - 1);
-    } else if (serial_datum == 11) {
-      // lowering time change UP
-      Serial.println("PURGING TIME INCREASE PRESSED");
-      updateAndSavePurgingTime(purgingTimeInMillis / 100 + 1);
-    } else if (serial_datum == 12) {
-      // lowering time change UP
-      Serial.println("PURGING TIME DECREASE PRESSED");
-      updateAndSavePurgingTime(purgingTimeInMillis / 100 - 1);
-    }
-  }
-}
-
 void startFillingProcess() {
   Serial.println("START FILLING");
+  fillingInProcess = true;
 
   // sometimes a little more pulses come in after closing the solenoid valve, so reset these values.
   beverageVolume1 = 0.0;
@@ -202,10 +182,22 @@ void startFillingProcess() {
   beverageVolume3 = 0.0;
   beverageVolume4 = 0.0;
 
+  // display purging on waveform, for fun
   lowerFillingHeads();
-  delay(loweringTimeInMillis);  // TODO: replace blocking code?
+  uint8_t increment = loweringTimeInMillis / 120;
+  for (int i = 0; i <= 120; i = i + 1) {
+    nextion.addDataWaveform(22, 0, i);
+    delay(increment);  // TODO: replace blocking code?
+  }
   purgeCO2();
-  delay(purgingTimeInMillis);  // TODO: replace blocking code?
+
+  // display purging on waveform, for fun
+  increment = purgingTimeInMillis / 120;
+  for (int i = 0; i <= 120; i = i + 1) {
+    nextion.addDataWaveform(22, 1, i);
+    delay(increment);  // TODO: replace blocking code?
+  }
+
   stopCO2();
   startFilling();
 
@@ -252,7 +244,7 @@ void checkFlowMeter1(uint32_t currentTime) {
   pulseCount1 = 0;
 
   // stop filling, if we are full
-  if (beverageVolume1 >= ouncesToFill) {
+  if (beverageVolume1 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
     stopFilling1();
   }
@@ -272,7 +264,7 @@ void checkFlowMeter2(uint32_t currentTime) {
   pulseCount2 = 0;
 
   // stop filling, if we are full
-  if (beverageVolume2 >= ouncesToFill) {
+  if (beverageVolume2 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
     stopFilling2();
   }
@@ -292,7 +284,7 @@ void checkFlowMeter3(uint32_t currentTime) {
   pulseCount3 = 0;
 
   // stop filling, if we are full
-  if (beverageVolume3 >= ouncesToFill) {
+  if (beverageVolume3 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
     stopFilling3();
   }
@@ -312,7 +304,7 @@ void checkFlowMeter4(uint32_t currentTime) {
   pulseCount4 = 0;
 
   // stop filling, if we are full
-  if (beverageVolume4 >= ouncesToFill) {
+  if (beverageVolume4 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
     stopFilling4();
   }
@@ -353,7 +345,6 @@ void stopCO2() {
 // STEP 3
 // After the oxygen has been purged, begin filling bottles with beverage
 void startFilling() {
-  fillingInProcess = true;
   fillingHead1Stopped = false;
   fillingHead2Stopped = false;
   fillingHead3Stopped = false;
@@ -408,12 +399,15 @@ void emergencyStop() {
 
   // finally, raise filling heads
   digitalWrite(AIR_CYLINDER_RELAY_1, HIGH);
+  fillingInProcess = false;
 }
+
+// Nextion Stuff
 
 void updateLoweringTime(uint8_t newTime) {
   loweringTimeInMillis = newTime * 100;  // convert it from tenths of a second to milliseconds
   // update interface
-  HMI_setTimer("x0", newTime);
+  nextion.setVariable("x0", newTime);
 }
 
 void updateAndSaveLoweringTime(uint8_t newTime) {
@@ -427,7 +421,7 @@ void updateAndSaveLoweringTime(uint8_t newTime) {
 void updatePurgingTime(uint8_t newTime) {
   purgingTimeInMillis = newTime * 100;  // convert it from tenths of a second to milliseconds
   // update interface
-  HMI_setTimer("x1", newTime);
+  nextion.setVariable("x1", newTime);
 }
 
 void updateAndSavePurgingTime(uint8_t newTime) {
@@ -438,12 +432,91 @@ void updateAndSavePurgingTime(uint8_t newTime) {
   EEPROM.put(PURGING_TIME_EEPROM_ADDRESS, newTime);
 }
 
-// HMI functions
-void HMI_setTimer(String hmiVariable, uint32_t newTime) {
-  Serial1.print(hmiVariable);
-  Serial1.print(".val=");
-  Serial1.print(newTime);
-  Serial1.write(0xff);
-  Serial1.write(0xff);
-  Serial1.write(0xff);
+void updateBeverageAdjustment(uint8_t newAdjustment) {
+  percentToAdjust = newAdjustment;  // convert it from tenths of a second to milliseconds
+  // update interface
+  nextion.setVariable("n0", newAdjustment);
+}
+
+void updateAndSaveBeverageAdjustment(uint8_t newAdjustment) {
+  updateBeverageAdjustment(newAdjustment);
+
+  Serial.print("New Beverage Adjustment: "); Serial.println(newAdjustment);
+  // write it to memory
+  EEPROM.put(PERCENT_ADJUST_EEPROM_ADDRESS, newAdjustment);
+}
+
+void updateBeverageSize(uint16_t newSize) {
+  beverageSizeInML = newSize * 5;
+  // update interface
+  nextion.setVariable("n1", newSize * 5);
+}
+
+void updateAndSaveBeverageSize(uint16_t newSize) {
+  updateBeverageSize(newSize);
+
+  Serial.print("New Beverage Size: "); Serial.println(newSize);
+  // write it to memory
+  EEPROM.put(BEVERAGE_SIZE_EEPROM_ADDRESS, newSize);
+}
+
+// Nextion Variables / Buttons
+// x0 - Lowering Time Float
+// x1 - CO2 Purge Time Float
+// n0 - Percent Adjustment for Beverage (starts at 100%)
+// t7 - Text Output / Messages back to user
+// s0 - 4 channel graph/waveform
+// fill - `print "fill"` - Fill Button
+// stop - `print "stop"` - Stop Button
+// b1 - `print "more lowering"` - More Time for Lowering - increases x0
+// b2 - `print "less lowering"` - Less Time for Lowering - decreases x0
+// b3 - `print "more purge"` - More Time for CO2 Purge - increases x1
+// b4 - `print "less purge"` - Less Time for CO2 Purge - decreases x1
+// b5 - `print "more bev"` - More Adjustment for Beverage - increases n0
+// b6 - `print "less bev"` - Less Adjustment for Beverage - decreases n0
+// b9 - `print "cip"` - CIP
+
+
+void ProcessNextionData(uint8_t eventType, String eventData) {
+  if (nextion.BUTTON_PRESS == eventType) {
+    if (eventData == "fill") {;
+      // if we are already in the filling process, do an emergency stop? (or ignore it?)
+      if (fillingInProcess) {
+        Serial.println("Filling already in progress...");
+          // emergencyStop();
+        } else {
+          startFillingProcess();
+        }
+    } else if (eventData == "stop") {
+      emergencyStop();
+    } else if (eventData == "cip") {
+      // CIP
+    } else if (eventData == "more lowering") {
+      Serial.println("LOWERING TIME INCREASE PRESSED");
+      updateAndSaveLoweringTime(loweringTimeInMillis / 100 + 1);
+    } else if (eventData == "less lowering") {
+      Serial.println("LOWERING TIME DECREASE PRESSED");
+      updateAndSaveLoweringTime(loweringTimeInMillis / 100 - 1);
+    } else if (eventData == "more purge") {
+      Serial.println("PURGING TIME INCREASE PRESSED");
+      updateAndSavePurgingTime(purgingTimeInMillis / 100 + 1);
+    } else if (eventData == "less purge") {
+      Serial.println("PURGING TIME DECREASE PRESSED");
+      updateAndSavePurgingTime(purgingTimeInMillis / 100 - 1);
+    } else if (eventData == "more adj") {
+      Serial.println("MORE ADJ INCREASE PRESSED");
+      updateAndSaveBeverageAdjustment(percentToAdjust + 1);
+    } else if (eventData == "less adj") {
+      Serial.println("LESS ADJ DECREASE PRESSED");
+      updateAndSaveBeverageAdjustment(percentToAdjust - 1);
+    } else if (eventData == "more bev") {
+      Serial.println("MORE BEV INCREASE PRESSED");
+      updateAndSaveBeverageSize(beverageSizeInML / 5 + 1);
+    } else if (eventData == "less bev") {
+      Serial.println("LESS BEV DECREASE PRESSED");
+      updateAndSaveBeverageSize(beverageSizeInML / 5 - 1);
+    } else {
+      Serial.print("Unknown Button Press: "); Serial.println(eventData);
+    }
+  }
 }
