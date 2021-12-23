@@ -47,8 +47,10 @@ class OurNextion {
 
       String output;
       while (Serial1.available() > 0) {
+//        Serial.print(char(Serial1.read()), HEX);
         output = Serial1.readString();
 
+//        Serial.println(output);
         // we only currently support button presses
         EventCallback(BUTTON_PRESS, output);
       }
@@ -82,10 +84,21 @@ class OurNextion {
       finish();
     }
 
-    void setVariable(String variable, String value) {
+    void setText(String variable, String value) {
       Serial1.print(variable);
-      Serial1.print(".val=");
+      Serial1.print(".txt=");
+      Serial1.print('"');
       Serial1.print(value);
+      Serial1.print('"');
+      finish();
+    }
+
+    void appendText(String variable, String value) {
+      Serial1.print(variable);
+      Serial1.print(".txt+=");
+      Serial1.print('"');
+      Serial1.print(value);
+      Serial1.print('"');
       finish();
     }
 
@@ -96,6 +109,12 @@ class OurNextion {
       Serial1.print(channel);
       Serial1.print(",");
       Serial1.print(value);
+      finish();
+    }
+
+    void gotoPage(String page) {
+      Serial1.print("page ");
+      Serial1.print(page);
       finish();
     }
 };
