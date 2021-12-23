@@ -91,6 +91,9 @@ void setup() {
   Serial.println("------------------------------------");
   Serial.println("SETUP");
 
+  serial_nextion_clear();
+  serial_nextion_println("Ready...");
+
   // Lowering Filling Heads TIME - load from EEPROM
   uint8_t loweringTimeValueFromEEPROM;
   EEPROM.get(LOWERING_TIME_EEPROM_ADDRESS, loweringTimeValueFromEEPROM);
@@ -174,6 +177,7 @@ void loop() {
 
 void startFillingProcess() {
   Serial.println("START FILLING");
+  serial_nextion_println("Filling process started...");
   fillingInProcess = true;
 
   // sometimes a little more pulses come in after closing the solenoid valve, so reset these values.
@@ -182,23 +186,27 @@ void startFillingProcess() {
   beverageVolume3 = 0.0;
   beverageVolume4 = 0.0;
 
+  serial_nextion_println("Lowering fill heads...");
   // display purging on waveform, for fun
   lowerFillingHeads();
   uint8_t increment = loweringTimeInMillis / 120;
   for (int i = 0; i <= 120; i = i + 1) {
-    nextion.addDataWaveform(22, 0, i);
+    nextion.addDataWaveform(3, 0, i);
     delay(increment);  // TODO: replace blocking code?
   }
   purgeCO2();
 
+  serial_nextion_println("Purging Oxygen from bottles...");
+
   // display purging on waveform, for fun
   increment = purgingTimeInMillis / 120;
   for (int i = 0; i <= 120; i = i + 1) {
-    nextion.addDataWaveform(22, 1, i);
+    nextion.addDataWaveform(3, 1, i);
     delay(increment);  // TODO: replace blocking code?
   }
 
   stopCO2();
+  serial_nextion_println("Filling bottles...");
   startFilling();
 
   // record start time to see how long each filling head takes
@@ -225,8 +233,10 @@ void checkFillingHeads() {
       fillingHead4Stopped) {
     // code starts here
     Serial.println("FILLING FINISHED");
+    serial_nextion_println("Filling Finished!");
     fillingInProcess = false;
     raiseFillingHeads();
+    nextion.gotoPage("ready");
   }
 }
 
@@ -246,6 +256,7 @@ void checkFlowMeter1(uint32_t currentTime) {
   // stop filling, if we are full
   if (beverageVolume1 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
+    serial_nextion_println("Filling Head 1 Complete");
     stopFilling1();
   }
 }
@@ -266,6 +277,7 @@ void checkFlowMeter2(uint32_t currentTime) {
   // stop filling, if we are full
   if (beverageVolume2 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
+    serial_nextion_println("Filling Head 2 Complete");
     stopFilling2();
   }
 }
@@ -286,6 +298,7 @@ void checkFlowMeter3(uint32_t currentTime) {
   // stop filling, if we are full
   if (beverageVolume3 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
+    serial_nextion_println("Filling Head 3 Complete");
     stopFilling3();
   }
 }
@@ -306,6 +319,7 @@ void checkFlowMeter4(uint32_t currentTime) {
   // stop filling, if we are full
   if (beverageVolume4 >= beverageSizeInML) {
     Serial.print("CLOSING VALVE after "); Serial.print((currentTime - startTime) / 1000.0); Serial.println(" seconds;");
+    serial_nextion_println("Filling Head 4 Complete");
     stopFilling4();
   }
 }
@@ -387,6 +401,7 @@ void raiseFillingHeads() {
 // if we double hit the start button, that triggers an emergency stop
 void emergencyStop() {
   Serial.println("EMERGENCY STOP PRESSED");
+  serial_nextion_println("EMERGENCY STOP");
 
   // immediately turn off filling heads
   digitalWrite(BEVERAGE_FILLING_RELAY_1, HIGH);
@@ -407,7 +422,7 @@ void emergencyStop() {
 void updateLoweringTime(uint8_t newTime) {
   loweringTimeInMillis = newTime * 100;  // convert it from tenths of a second to milliseconds
   // update interface
-  nextion.setVariable("x0", newTime);
+  nextion.setVariable("ready.x0", newTime);
 }
 
 void updateAndSaveLoweringTime(uint8_t newTime) {
@@ -421,7 +436,7 @@ void updateAndSaveLoweringTime(uint8_t newTime) {
 void updatePurgingTime(uint8_t newTime) {
   purgingTimeInMillis = newTime * 100;  // convert it from tenths of a second to milliseconds
   // update interface
-  nextion.setVariable("x1", newTime);
+  nextion.setVariable("ready.x1", newTime);
 }
 
 void updateAndSavePurgingTime(uint8_t newTime) {
@@ -435,7 +450,7 @@ void updateAndSavePurgingTime(uint8_t newTime) {
 void updateBeverageAdjustment(uint8_t newAdjustment) {
   percentToAdjust = newAdjustment;  // convert it from tenths of a second to milliseconds
   // update interface
-  nextion.setVariable("n0", newAdjustment);
+  nextion.setVariable("ready.n0", newAdjustment);
 }
 
 void updateAndSaveBeverageAdjustment(uint8_t newAdjustment) {
@@ -449,7 +464,7 @@ void updateAndSaveBeverageAdjustment(uint8_t newAdjustment) {
 void updateBeverageSize(uint16_t newSize) {
   beverageSizeInML = newSize * 5;
   // update interface
-  nextion.setVariable("n1", newSize * 5);
+  nextion.setVariable("ready.n1", newSize * 5);
 }
 
 void updateAndSaveBeverageSize(uint16_t newSize) {
@@ -482,7 +497,7 @@ void ProcessNextionData(uint8_t eventType, String eventData) {
     if (eventData == "fill") {;
       // if we are already in the filling process, do an emergency stop? (or ignore it?)
       if (fillingInProcess) {
-        Serial.println("Filling already in progress...");
+        serial_nextion_println("Filling already in progress...");
           // emergencyStop();
         } else {
           startFillingProcess();
@@ -516,7 +531,29 @@ void ProcessNextionData(uint8_t eventType, String eventData) {
       Serial.println("LESS BEV DECREASE PRESSED");
       updateAndSaveBeverageSize(beverageSizeInML / 5 - 1);
     } else {
-      Serial.print("Unknown Button Press: "); Serial.println(eventData);
+      serial_nextion_print("Unknown Button Press: "); serial_nextion_println(eventData);
     }
   }
+}
+
+String nextionSerialPrint = "";
+uint8_t nextionSerialPrintLineCount = 0;
+void serial_nextion_print(String printThis) {
+  // Serial.print(printThis);
+  nextionSerialPrint += printThis;
+
+  // if it's too long, drop the first line.
+  if (nextionSerialPrintLineCount > 5) {
+    nextionSerialPrint.remove(0, nextionSerialPrint.indexOf("\\r")+2);
+    // keep it under 255
+    if (nextionSerialPrintLineCount > 200) { nextionSerialPrintLineCount = 7; }
+  }
+  nextion.setText("filling.t7", nextionSerialPrint);
+}
+void serial_nextion_println(String printThis) {
+  serial_nextion_print(printThis + "\\r");
+  nextionSerialPrintLineCount = nextionSerialPrintLineCount + 1;
+}
+void serial_nextion_clear() {
+  nextion.setText("filling.t7", "");
 }
