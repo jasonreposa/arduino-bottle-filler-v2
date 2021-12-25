@@ -45,7 +45,7 @@ uint32_t timeBetweenInterruptCheck = 100; // check flow meter every tenth of a s
 
 // Area of 1/4 diameter (6.35 millimeters) = pi * (6.35/2)^2 = 31.6692174436
 // Area of 3/8 diameter (9.52 millimeters) = pi * (9.52/2)^2 = 71.180949708
-uint32_t pulsesPerLiter = 1380; // 1/4 DIGITEN - https://digiten.shop/products/digiten-1-4-quick-connect-0-3-10l-min-water-hall-effect-flow-sensor-meter
+// uint32_t pulsesPerLiter = 1380; // 1/4 DIGITEN - https://digiten.shop/products/digiten-1-4-quick-connect-0-3-10l-min-water-hall-effect-flow-sensor-meter
 // uint32_t pulsesPerLiter = 450; // 3/8 DIGITEN - https://smile.amazon.com/ask/questions/TxNFD5HNWLKHEW/ref=ask_dp_dpmw_al_hza - https://www.digiten.shop/products/digiten-g3-8-quick-connect-water-flow-sensor-switch-flowmeter-counter-0-3-10l-min
 
 // I've lost the math somewhere in here, but for now we'll hard code a new number
@@ -58,14 +58,28 @@ uint32_t pulsesPerLiter = 1380; // 1/4 DIGITEN - https://digiten.shop/products/d
 // 1380 pulses per liter * 0.355 liters = 489.9 pulses to get to 355mLs
 
 // 12 PSI - the hard coded number, until I figure out the math above again. The math below had to change as well.
-double mLsPerPulseConstant = 0.4725;  // how many mL in each pulse?
+// FOR 1/4" flow meter 23*Q(L/min) - double mLsPerPulseConstant = 0.4725;  // how many mL in each pulse?
+double mLsPerPulseConstant = 0.967;  // how many mL in each pulse?
 
-// BOOL state machine, ha!
+// Fill Head 3
+//double mLsPerPulseConstant = 0.922;  // how many mL in each pulse?
+// Fill Head 4?
+//double mLsPerPulseConstant = 0.922;  // how many mL in each pulse?
+
+// Set each head active that you want to work.
 bool fillingInProcess = false;
+
 bool fillingHead1Stopped = true;
+bool fillingHead1Active = true;
+
 bool fillingHead2Stopped = true;
+bool fillingHead2Active = true;
+
 bool fillingHead3Stopped = true;
+bool fillingHead3Active = true;
+
 bool fillingHead4Stopped = true;
+bool fillingHead4Active = true;
 
 // each address is 8 bits / 1 byte away (unless you use avrEeprom, which currently isn't working for me)
 #define LOWERING_TIME_EEPROM_ADDRESS 0
@@ -179,12 +193,6 @@ void startFillingProcess() {
   Serial.println("START FILLING");
   serial_nextion_println("Filling process started...");
   fillingInProcess = true;
-
-  // sometimes a little more pulses come in after closing the solenoid valve, so reset these values.
-  beverageVolume1 = 0.0;
-  beverageVolume2 = 0.0;
-  beverageVolume3 = 0.0;
-  beverageVolume4 = 0.0;
 
   serial_nextion_println("Lowering fill heads...");
   // display purging on waveform, for fun
@@ -359,14 +367,31 @@ void stopCO2() {
 // STEP 3
 // After the oxygen has been purged, begin filling bottles with beverage
 void startFilling() {
-  fillingHead1Stopped = false;
-  fillingHead2Stopped = false;
-  fillingHead3Stopped = false;
-  fillingHead4Stopped = false;
-  digitalWrite(BEVERAGE_FILLING_RELAY_1, LOW);
-  digitalWrite(BEVERAGE_FILLING_RELAY_2, LOW);
-  digitalWrite(BEVERAGE_FILLING_RELAY_3, LOW);
-  digitalWrite(BEVERAGE_FILLING_RELAY_4, LOW);
+  // sometimes a little more pulses come in after closing the solenoid valve, so reset these values.
+  beverageVolume1 = 0.0;
+  beverageVolume2 = 0.0;
+  beverageVolume3 = 0.0;
+  beverageVolume4 = 0.0;
+
+  if (fillingHead1Active) {
+    fillingHead1Stopped = false;
+    digitalWrite(BEVERAGE_FILLING_RELAY_1, LOW);
+  }
+
+  if (fillingHead2Active) {
+    fillingHead2Stopped = false;
+    digitalWrite(BEVERAGE_FILLING_RELAY_2, LOW);
+  }
+
+  if (fillingHead3Active) {
+    fillingHead3Stopped = false;
+    digitalWrite(BEVERAGE_FILLING_RELAY_3, LOW);
+  }
+
+  if (fillingHead4Active) {
+    fillingHead4Stopped = false;
+    digitalWrite(BEVERAGE_FILLING_RELAY_4, LOW);
+  }
 }
 
 // STEP 4
